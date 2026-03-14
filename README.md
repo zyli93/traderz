@@ -12,7 +12,8 @@ An automated stock analysis and paper trading system that combines real-time mar
 
 ## Prerequisites
 
-- Python 3.10+
+- Python 3.13+
+- [uv](https://docs.astral.sh/uv/) package manager
 - [Alpaca](https://alpaca.markets) paper trading account (free)
 - [Claude Code](https://claude.com/claude-code) CLI
 
@@ -24,15 +25,17 @@ git clone https://github.com/zyli93/traderz.git
 cd traderz
 
 # Install dependencies
-pip install -r requirements.txt
+uv sync
 
-# Set up Alpaca credentials
-cp .env.example .env
-# Edit .env with your paper trading API keys
-
-# Export env vars
-export ALPACA_API_KEY=your_key_here
-export ALPACA_SECRET_KEY=your_secret_here
+# Set up Alpaca credentials (stored outside the repo)
+mkdir -p ~/.config/traderz
+cat > ~/.config/traderz/credentials.json << 'EOF'
+{
+  "ALPACA_API_KEY": "your_paper_trading_api_key",
+  "ALPACA_SECRET_KEY": "your_paper_trading_secret_key"
+}
+EOF
+chmod 600 ~/.config/traderz/credentials.json
 ```
 
 ## Usage with Claude Code

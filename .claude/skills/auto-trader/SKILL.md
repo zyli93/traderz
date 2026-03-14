@@ -62,12 +62,12 @@ When the user asks to analyze or trade a stock:
 
 1. **Install dependencies** (first run only):
    ```bash
-   pip install yfinance alpaca-py pandas ta --break-system-packages
+   uv sync
    ```
 
 2. **Fetch and analyze data**:
    ```bash
-   python scripts/fetch_data.py --ticker AAPL --period 6mo --interval 1d
+   uv run scripts/fetch_data.py --ticker AAPL --period 6mo --interval 1d
    ```
    This outputs a JSON file at `/tmp/analysis_AAPL.json` containing:
    - Recent price action (last 30 days OHLCV)
@@ -88,17 +88,17 @@ When the user asks to analyze or trade a stock:
 
 4. **Execute the trade** (if user confirms):
    ```bash
-   python scripts/trade.py --action buy --ticker AAPL --qty 10 --order-type market
+   uv run scripts/trade.py --action buy --ticker AAPL --qty 10 --order-type market
    ```
    Or for a bracket order with stop-loss and take-profit:
    ```bash
-   python scripts/trade.py --action buy --ticker AAPL --qty 10 \
+   uv run scripts/trade.py --action buy --ticker AAPL --qty 10 \
      --order-type bracket --stop-loss 170.00 --take-profit 195.00
    ```
 
 5. **Check portfolio**:
    ```bash
-   python scripts/trade.py --action portfolio
+   uv run scripts/trade.py --action portfolio
    ```
 
 ## Important Guidelines

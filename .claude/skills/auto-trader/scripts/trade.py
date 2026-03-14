@@ -39,17 +39,40 @@ import os
 import sys
 
 
+def load_credentials():
+    """Load Alpaca credentials from ~/.config/traderz/credentials.json or env vars.
+
+    Priority: environment variables > config file.
+    """
+    api_key = os.environ.get("ALPACA_API_KEY")
+    secret_key = os.environ.get("ALPACA_SECRET_KEY")
+
+    if api_key and secret_key:
+        return api_key, secret_key
+
+    config_path = os.path.expanduser("~/.config/traderz/credentials.json")
+    if os.path.exists(config_path):
+        with open(config_path) as f:
+            creds = json.load(f)
+        api_key = creds.get("ALPACA_API_KEY")
+        secret_key = creds.get("ALPACA_SECRET_KEY")
+        if api_key and secret_key:
+            return api_key, secret_key
+
+    return None, None
+
+
 def get_client():
     """Create and return Alpaca trading client."""
     from alpaca.trading.client import TradingClient
 
-    api_key = os.environ.get("ALPACA_API_KEY")
-    secret_key = os.environ.get("ALPACA_SECRET_KEY")
+    api_key, secret_key = load_credentials()
 
     if not api_key or not secret_key:
         print(json.dumps({
             "error": "Missing Alpaca credentials",
-            "message": "Please set ALPACA_API_KEY and ALPACA_SECRET_KEY environment variables. "
+            "message": "Set env vars ALPACA_API_KEY/ALPACA_SECRET_KEY, or create "
+                       "~/.config/traderz/credentials.json with those keys. "
                        "Get free paper trading keys at https://alpaca.markets"
         }))
         sys.exit(1)

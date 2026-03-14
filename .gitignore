@@ -22,3 +22,6 @@ Thumbs.db
 
 # Output
 /tmp/analysis_*.json
+
+# Trading state (session history, P&L tracking)
+state/

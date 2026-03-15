@@ -2,6 +2,8 @@
 """
 trade.py — Execute paper trades and manage portfolio via Alpaca API.
 
+Supports both stocks and crypto. Crypto symbols use slash format (BTC/USD).
+
 Usage:
     # Buy shares
     python trade.py --action buy --ticker AAPL --qty 10 --order-type market
@@ -9,9 +11,18 @@ Usage:
     # Sell shares
     python trade.py --action sell --ticker AAPL --qty 5 --order-type limit --limit-price 185.00
 
-    # Bracket order (buy with stop-loss and take-profit)
+    # Bracket order (buy with stop-loss and take-profit) — stocks only
     python trade.py --action buy --ticker AAPL --qty 10 \
         --order-type bracket --stop-loss 170.00 --take-profit 195.00
+
+    # Buy crypto (fractional supported)
+    python trade.py --action buy --ticker BTC/USD --qty 0.01 --order-type market
+    python trade.py --action buy --ticker ETH/USD --notional 500 --order-type market
+    python trade.py --action buy --ticker SOL/USD --qty 5 --order-type limit --limit-price 140.00
+
+    # Crypto stop-limit order (manual stop-loss)
+    python trade.py --action sell --ticker BTC/USD --qty 0.01 \
+        --order-type stop-limit --stop-loss 80000 --limit-price 79500
 
     # View portfolio
     python trade.py --action portfolio
@@ -27,6 +38,7 @@ Usage:
 
     # Close a specific position
     python trade.py --action close --ticker AAPL
+    python trade.py --action close --ticker BTCUSD
 
 Environment variables required:
     ALPACA_API_KEY — Paper trading API key
@@ -143,9 +155,21 @@ def get_orders(client):
     return result
 
 
+def is_crypto(ticker):
+    """Check if a ticker is a crypto pair (e.g., BTC/USD, ETHUSD)."""
+    crypto_bases = [
+        "BTC", "ETH", "SOL", "XRP", "DOGE", "LINK", "AVAX", "DOT",
+        "LTC", "UNI", "SHIB", "PEPE", "AAVE", "BCH", "CRV", "GRT",
+        "BAT", "SUSHI", "XTZ", "YFI", "TRUMP", "USDC", "USDT", "USDG", "SKY",
+    ]
+    normalized = ticker.replace("/", "").upper()
+    return any(normalized.startswith(base) and normalized.endswith(("USD", "USDT", "USDC", "BTC"))
+               for base in crypto_bases)
+
+
 def place_order(client, ticker, qty, side, order_type, limit_price=None,
-                stop_loss=None, take_profit=None):
-    """Place a paper trade order."""
+                stop_loss=None, take_profit=None, notional=None):
+    """Place a paper trade order. Handles both stocks and crypto."""
     from alpaca.trading.requests import (
         MarketOrderRequest, LimitOrderRequest, StopOrderRequest,
         StopLimitOrderRequest
@@ -153,14 +177,27 @@ def place_order(client, ticker, qty, side, order_type, limit_price=None,
     from alpaca.trading.enums import OrderSide, TimeInForce
 
     order_side = OrderSide.BUY if side == "buy" else OrderSide.SELL
+    crypto = is_crypto(ticker)
+
+    # Crypto uses GTC; stocks use DAY
+    tif = TimeInForce.GTC if crypto else TimeInForce.DAY
+
+    # Build qty/notional kwargs
+    size_kwargs = {}
+    if notional:
+        size_kwargs["notional"] = notional
+    elif qty:
+        size_kwargs["qty"] = qty
+    else:
+        return {"error": "Either qty or notional required"}
 
     try:
         if order_type == "market":
             request = MarketOrderRequest(
                 symbol=ticker,
-                qty=qty,
                 side=order_side,
-                time_in_force=TimeInForce.DAY,
+                time_in_force=tif,
+                **size_kwargs,
             )
             order = client.submit_order(order_data=request)
 
@@ -169,36 +206,53 @@ def place_order(client, ticker, qty, side, order_type, limit_price=None,
                 return {"error": "Limit price required for limit orders"}
             request = LimitOrderRequest(
                 symbol=ticker,
-                qty=qty,
                 side=order_side,
-                time_in_force=TimeInForce.DAY,
+                time_in_force=tif,
                 limit_price=limit_price,
+                **size_kwargs,
             )
             order = client.submit_order(order_data=request)
 
         elif order_type == "stop":
+            if crypto:
+                return {"error": "Crypto does not support plain stop orders. Use stop-limit instead."}
             if not stop_loss:
                 return {"error": "Stop price required for stop orders"}
             request = StopOrderRequest(
                 symbol=ticker,
-                qty=qty,
                 side=order_side,
-                time_in_force=TimeInForce.DAY,
+                time_in_force=tif,
                 stop_price=stop_loss,
+                **size_kwargs,
+            )
+            order = client.submit_order(order_data=request)
+
+        elif order_type == "stop-limit":
+            if not stop_loss or not limit_price:
+                return {"error": "Both stop-loss and limit-price required for stop-limit orders"}
+            request = StopLimitOrderRequest(
+                symbol=ticker,
+                side=order_side,
+                time_in_force=tif,
+                stop_price=stop_loss,
+                limit_price=limit_price,
+                **size_kwargs,
             )
             order = client.submit_order(order_data=request)
 
         elif order_type == "bracket":
+            if crypto:
+                return {"error": "Crypto does not support bracket orders. Use separate market + stop-limit orders instead."}
             if not stop_loss or not take_profit:
                 return {"error": "Both stop-loss and take-profit required for bracket orders"}
             request = MarketOrderRequest(
                 symbol=ticker,
-                qty=qty,
                 side=order_side,
-                time_in_force=TimeInForce.DAY,
+                time_in_force=tif,
                 order_class="bracket",
                 take_profit={"limit_price": take_profit},
                 stop_loss={"stop_price": stop_loss},
+                **size_kwargs,
             )
             order = client.submit_order(order_data=request)
 
@@ -211,8 +265,10 @@ def place_order(client, ticker, qty, side, order_type, limit_price=None,
             "symbol": order.symbol,
             "side": str(order.side),
             "type": str(order.type),
-            "qty": str(order.qty),
+            "qty": str(order.qty) if order.qty else None,
+            "notional": str(order.notional) if hasattr(order, "notional") and order.notional else None,
             "time_in_force": str(order.time_in_force),
+            "asset_class": "crypto" if crypto else "stock",
             "created_at": str(order.created_at),
         }
 
@@ -245,9 +301,11 @@ def main():
                                  "orders", "close", "cancel-all"],
                         help="Trading action to perform")
     parser.add_argument("--ticker", default=None, help="Stock ticker symbol")
-    parser.add_argument("--qty", type=float, default=None, help="Number of shares")
+    parser.add_argument("--qty", type=float, default=None, help="Number of shares/coins")
+    parser.add_argument("--notional", type=float, default=None,
+                        help="Dollar amount to buy (crypto/fractional). Use instead of --qty.")
     parser.add_argument("--order-type", default="market",
-                        choices=["market", "limit", "stop", "bracket"],
+                        choices=["market", "limit", "stop", "stop-limit", "bracket"],
                         help="Order type")
     parser.add_argument("--limit-price", type=float, default=None, help="Limit price")
     parser.add_argument("--stop-loss", type=float, default=None, help="Stop loss price")
@@ -273,13 +331,13 @@ def main():
     elif args.action == "orders":
         result = {"open_orders": get_orders(client)}
     elif args.action in ("buy", "sell"):
-        if not args.ticker or not args.qty:
-            result = {"error": "Ticker and quantity required for buy/sell"}
+        if not args.ticker or (not args.qty and not args.notional):
+            result = {"error": "Ticker and quantity (or notional) required for buy/sell"}
         else:
             result = place_order(
                 client, args.ticker.upper(), args.qty, args.action,
                 args.order_type, args.limit_price, args.stop_loss,
-                args.take_profit
+                args.take_profit, args.notional
             )
     elif args.action == "close":
         if not args.ticker:

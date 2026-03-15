@@ -218,7 +218,12 @@ def main():
     results = {}
 
     for symbol in tickers:
-        results[symbol] = analyze_ticker(symbol, args.period, args.interval)
+        # Convert crypto Alpaca format (BTC/USD) to yfinance format (BTC-USD)
+        yf_symbol = symbol.replace("/", "-")
+        results[symbol] = analyze_ticker(yf_symbol, args.period, args.interval)
+        # Preserve the original symbol key
+        if yf_symbol != symbol:
+            results[symbol]["ticker"] = symbol
 
     # Determine output path
     if args.output:

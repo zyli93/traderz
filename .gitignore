@@ -12,6 +12,11 @@ build/
 .env
 .env.local
 
+# Claude Code local config
+.claude/.claude/
+.claude/scheduled_tasks.lock
+.claude/settings.local.json
+
 # OS
 .DS_Store
 Thumbs.db

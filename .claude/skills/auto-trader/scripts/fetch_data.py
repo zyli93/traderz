@@ -124,6 +124,72 @@ def get_fundamentals(ticker_obj) -> dict:
     return fundamentals
 
 
+def get_analyst_and_news(ticker_obj) -> dict:
+    """Extract analyst ratings, price targets, and recent news."""
+    result = {}
+
+    # Price targets
+    try:
+        apt = ticker_obj.analyst_price_targets
+        if apt is not None and isinstance(apt, dict):
+            result["price_targets"] = {
+                "current": apt.get("current"),
+                "mean": apt.get("mean"),
+                "high": apt.get("high"),
+                "low": apt.get("low"),
+                "number_of_analysts": apt.get("numberOfAnalysts"),
+            }
+    except Exception:
+        pass
+
+    # Recommendations summary
+    try:
+        rs = ticker_obj.recommendations_summary
+        if rs is not None and isinstance(rs, pd.DataFrame) and not rs.empty:
+            latest = rs.iloc[0].to_dict()
+            result["recommendations_summary"] = {
+                "strongBuy": int(latest.get("strongBuy", 0)),
+                "buy": int(latest.get("buy", 0)),
+                "hold": int(latest.get("hold", 0)),
+                "sell": int(latest.get("sell", 0)),
+                "strongSell": int(latest.get("strongSell", 0)),
+            }
+    except Exception:
+        pass
+
+    # Recent rating changes (last 5)
+    try:
+        recs = ticker_obj.recommendations
+        if recs is not None and isinstance(recs, pd.DataFrame) and not recs.empty:
+            changes = []
+            for _, row in recs.tail(5).iterrows():
+                changes.append({
+                    "firm": row.get("Firm", ""),
+                    "grade": row.get("To Grade", ""),
+                    "from_grade": row.get("From Grade", ""),
+                    "action": row.get("Action", ""),
+                })
+            changes.reverse()
+            result["recent_changes"] = changes
+    except Exception:
+        pass
+
+    # Recent news (last 10 headlines)
+    try:
+        news = ticker_obj.news or []
+        headlines = []
+        for item in news[:10]:
+            headlines.append({
+                "title": item.get("title", ""),
+                "publisher": item.get("publisher"),
+            })
+        result["recent_headlines"] = headlines
+    except Exception:
+        pass
+
+    return result
+
+
 def analyze_ticker(symbol: str, period: str, interval: str) -> dict:
     """Full analysis pipeline for a single ticker."""
     print(f"Fetching data for {symbol}...", file=sys.stderr)
@@ -151,6 +217,9 @@ def analyze_ticker(symbol: str, period: str, interval: str) -> dict:
 
     # Fundamentals
     fundamentals = get_fundamentals(ticker)
+
+    # Analyst & news
+    analyst_and_news = get_analyst_and_news(ticker)
 
     # Recent price action (last 10 days for context)
     recent_prices = []
@@ -190,6 +259,13 @@ def analyze_ticker(symbol: str, period: str, interval: str) -> dict:
     elif indicators.get("BB_upper") and current_price > indicators["BB_upper"]:
         signals.append("Price above upper Bollinger Band")
 
+    # Analyst target upside signal
+    mean_target = (analyst_and_news.get("price_targets") or {}).get("mean")
+    if mean_target and current_price > 0:
+        upside = (mean_target - current_price) / current_price * 100
+        if upside > 20:
+            signals.append(f"Analyst mean target implies {upside:.0f}% upside")
+
     result = {
         "ticker": symbol,
         "analysis_time": datetime.now().isoformat(),
@@ -200,6 +276,7 @@ def analyze_ticker(symbol: str, period: str, interval: str) -> dict:
         "indicators": indicators,
         "support_resistance": levels,
         "fundamentals": fundamentals,
+        "analyst_and_news": analyst_and_news,
         "recent_prices": recent_prices,
         "signal_summary": signals,
     }

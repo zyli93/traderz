@@ -103,8 +103,25 @@ def find_support_resistance(df: pd.DataFrame, window: int = 20) -> dict:
     return levels
 
 
+def _is_crypto(symbol: str) -> bool:
+    """Check if a ticker is a crypto pair (e.g. BTC-USD)."""
+    return symbol.upper().endswith("-USD") and not symbol.startswith("^")
+
+
 def get_fundamentals(ticker_obj) -> dict:
     """Extract key fundamental data from yfinance Ticker object."""
+    if _is_crypto(ticker_obj.ticker):
+        # Crypto has no fundamentals — only fetch basic info fields
+        try:
+            info = ticker_obj.info
+        except Exception:
+            return {}
+        basics = {}
+        for f in ["shortName", "marketCap", "fiftyTwoWeekHigh", "fiftyTwoWeekLow", "averageVolume"]:
+            v = info.get(f)
+            if v is not None:
+                basics[f] = v
+        return basics
     info = ticker_obj.info
     fundamentals = {}
     fields = [
@@ -127,8 +144,21 @@ def get_fundamentals(ticker_obj) -> dict:
 def get_analyst_and_news(ticker_obj) -> dict:
     """Extract analyst ratings, price targets, and recent news."""
     result = {}
+    is_crypto = _is_crypto(ticker_obj.ticker)
 
-    # Price targets
+    # Price targets (skip for crypto — no analyst coverage)
+    if is_crypto:
+        result["price_targets"] = {"current": None, "mean": None, "high": None, "low": None, "number_of_analysts": None}
+        result["recommendations_summary"] = {}
+        result["recent_changes"] = []
+        # Still try to get news
+        try:
+            news = ticker_obj.news or []
+            result["recent_headlines"] = [{"title": item.get("title", ""), "publisher": item.get("publisher")} for item in news[:10]]
+        except Exception:
+            result["recent_headlines"] = []
+        return result
+
     try:
         apt = ticker_obj.analyst_price_targets
         if apt is not None and isinstance(apt, dict):

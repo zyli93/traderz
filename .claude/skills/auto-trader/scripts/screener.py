@@ -31,35 +31,75 @@ TECH50 = [
 
 SCAN_MODES = ["oversold_bounce", "breakout", "consolidation", "relative_strength", "gap_up", "all"]
 
+# Broad universe: ~250 names spanning all major sectors + international ADRs.
+# This is the "full scan" universe — covers far more than tech50 + multi-sector combined.
+# Updated 2026-04. Maintain manually; add/remove as companies change.
+BROAD_ALL = [
+    # --- Technology (beyond tech50) ---
+    "IBM", "ACN", "INTU", "SNPS", "CDNS", "ANSS", "TYL", "PAYC", "WDAY", "VEEV",
+    "HUBS", "DDOG", "ZI", "DOCU", "BILL", "PCOR",
+    # --- Semiconductors & Equipment (beyond tech50) ---
+    "ASML", "TSM", "TXN", "ADI", "ON", "MCHP", "NXPI", "SWKS", "MPWR", "WOLF",
+    "ENTG", "ONTO", "ACLS", "TER", "COHR",
+    # --- Financials ---
+    "JPM", "GS", "MS", "BAC", "WFC", "C", "USB", "TFC", "SCHW", "AXP",
+    "COF", "BLK", "SPGI", "ICE", "CME", "AON", "MMC", "PGR", "ALL", "MET",
+    "AIG", "HIG", "CB", "CINF",
+    # --- Healthcare ---
+    "UNH", "JNJ", "PFE", "LLY", "ABT", "VRTX", "REGN", "AMGN", "GILD", "MRK",
+    "ABBV", "TMO", "DHR", "ISRG", "SYK", "BDX", "EW", "BSX", "MDT", "DXCM",
+    "IDXX", "ZBH", "HCA", "CI", "ELV", "CNC", "MOH", "GEHC",
+    # --- Consumer Discretionary ---
+    "TSLA", "AMZN", "HD", "LOW", "NKE", "MCD", "SBUX", "YUM", "CMG", "DPZ",
+    "TGT", "TJX", "ROST", "DG", "DLTR", "BURL", "DECK", "LULU", "RCL", "MAR",
+    "HLT", "LVS", "WYNN", "MGM", "F", "GM",
+    # --- Consumer Staples ---
+    "PG", "KO", "PEP", "COST", "WMT", "CL", "EL", "MNST", "STZ", "PM",
+    "MO", "ADM", "BG", "SYY", "KR", "MDLZ",
+    # --- Industrials ---
+    "CAT", "DE", "GE", "HON", "MMM", "UPS", "FDX", "WM", "RSG", "ETN",
+    "ITW", "EMR", "ROK", "DOV", "IR", "PH", "GWW", "FAST", "URI", "PWR",
+    "BA", "LMT", "RTX", "GD", "NOC", "LHX", "HII", "TDG", "HWM",
+    # --- Transports ---
+    "DAL", "UAL", "LUV", "ALK", "CSX", "UNP", "NSC", "JBHT",
+    # --- Energy ---
+    "XOM", "CVX", "OXY", "SLB", "EOG", "FANG", "DVN", "MPC", "VLO", "PSX",
+    "HAL", "COP", "HES", "CTRA",
+    # --- Materials ---
+    "APD", "SHW", "ECL", "LIN", "NEM", "FCX", "SCCO", "NUE", "STLD", "VMC",
+    "MLM", "DOW", "DD", "CE",
+    # --- Utilities ---
+    "NEE", "SO", "DUK", "AEP", "ED", "EXC", "SRE", "PCG", "ES", "WEC",
+    # --- REITs ---
+    "O", "AMT", "PLD", "SPG", "EQIX", "DLR", "CCI", "WELL", "AVB", "PSA", "IRM",
+    # --- Communications ---
+    "META", "GOOGL", "NFLX", "DIS", "CMCSA", "TMUS", "VZ", "T", "CHTR",
+    # --- International ADRs ---
+    "BABA", "PDD", "JD", "BIDU", "NIO", "XPEV", "LI", "SE", "GRAB", "MELI",
+    "NU", "CPNG",
+    # --- Crypto-adjacent ---
+    "COIN", "MSTR", "MARA", "RIOT", "HUT", "CLSK",
+]
+
+# De-duplicate with TECH50 at resolve time
+_BROAD_ALL_SET = set(BROAD_ALL)
+
 
 def log(msg: str) -> None:
     print(msg, file=sys.stderr)
-
-
-def get_sp500_tickers() -> list[str]:
-    """Scrape S&P 500 tickers from Wikipedia."""
-    log("Fetching S&P 500 ticker list from Wikipedia...")
-    try:
-        tables = pd.read_html("https://en.wikipedia.org/wiki/List_of_S%26P_500_companies")
-        df = tables[0]
-        tickers = df["Symbol"].tolist()
-        # Fix tickers with dots (e.g., BRK.B -> BRK-B for yfinance)
-        tickers = [t.replace(".", "-") for t in tickers]
-        log(f"Found {len(tickers)} S&P 500 tickers")
-        return tickers
-    except Exception as e:
-        log(f"Error fetching S&P 500 list: {e}")
-        return []
 
 
 def resolve_tickers(args) -> list[str]:
     """Resolve ticker list from arguments."""
     if args.tickers:
         return [t.strip().upper() for t in args.tickers.split(",") if t.strip()]
-    if args.universe == "sp500":
-        return get_sp500_tickers()
     if args.universe == "tech50":
         return list(TECH50)
+    if args.universe == "broad":
+        # tech50 + broad_all, de-duplicated
+        combined = list(TECH50) + [t for t in BROAD_ALL if t not in set(TECH50)]
+        log(f"Broad universe: {len(combined)} tickers")
+        return combined
     log("Error: provide --tickers or --universe")
     sys.exit(1)
 
@@ -319,8 +359,8 @@ def main():
     parser = argparse.ArgumentParser(description="Trading Opportunity Screener")
     parser.add_argument("--scan", required=True, choices=SCAN_MODES, help="Scan mode to run")
     parser.add_argument("--tickers", type=str, default=None, help="Comma-separated list of tickers")
-    parser.add_argument("--universe", type=str, choices=["sp500", "tech50", "custom"], default=None,
-                        help="Predefined ticker universe")
+    parser.add_argument("--universe", type=str, choices=["broad", "tech50"], default=None,
+                        help="Predefined ticker universe (broad=~300 all-sector, tech50=50 tech)")
     parser.add_argument("--top", type=int, default=10, help="Max results per scan (default 10)")
     parser.add_argument("--period", type=str, default="6mo", help="Data period (default 6mo)")
     parser.add_argument("--interval", type=str, default="1d", help="Data interval (default 1d)")

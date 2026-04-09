@@ -135,94 +135,214 @@ Bad reasoning:
 - Checks account status, buying power, and existing positions
 - Reports back order confirmation or rejection details
 
-## Workflow
+## MANDATORY: Always Start With Portfolio Snapshot
 
-When the user asks to analyze or trade a stock:
+**Every time this skill is invoked**, before doing ANY analysis or trading,
+immediately run:
 
-1. **Install dependencies** (first run only):
-   ```bash
-   uv sync  # run from project root
-   ```
+```bash
+uv run .claude/skills/auto-trader/scripts/trade.py --action portfolio
+```
 
-2. **Fetch and analyze data**:
+Present a brief, compact snapshot to the user at the top of your response:
+
+```
+📊 Portfolio: $100,375 | Cash: $81,340 (81%)
+AMD 36 @ $200.58 → $204.37 (+$136, +1.9%)
+AMZN 17 @ $209.48 → $209.00 (-$8, -0.2%)
+MU 8 @ $430.10 → $447.37 (+$138, +4.0%)
+QCOM 20 @ $129.74 → $131.41 (+$33, +1.3%)
+BTC 0.027 @ $71,316 → $69,893 (-$39, -2.0%)
+```
+
+This gives the user immediate context before any analysis begins.
+
+## MANDATORY: Bookkeeping After Every Session
+
+After every trading session (analysis, trades, or portfolio check), record
+everything in the SQLite database. This is NOT optional — it ensures continuity
+across conversations.
+
+**After placing trades:**
+```bash
+uv run .claude/skills/auto-trader/scripts/db.py --action record-trade \
+  --ticker TICKER --side buy/sell --qty N --price P \
+  --stop-loss SL --take-profit TP --order-type TYPE \
+  --strategy "reason for trade"
+```
+
+**After closing/exiting trades:**
+```bash
+uv run .claude/skills/auto-trader/scripts/db.py --action close-trade \
+  --ticker TICKER --exit-price P
+```
+
+**Always at the end of every session:**
+```bash
+# Snapshot portfolio
+uv run .claude/skills/auto-trader/scripts/db.py --action snapshot
+
+# Log the session
+uv run .claude/skills/auto-trader/scripts/db.py --action record-session \
+  --regime "macro summary" --summary "what was done"
+
+# Log any lessons learned (if applicable)
+uv run .claude/skills/auto-trader/scripts/db.py --action add-lesson \
+  --text "lesson text"
+```
+
+**After reading news with clear directional calls:**
+```bash
+# Record a media/analyst call for later verification
+uv run .claude/skills/auto-trader/scripts/db.py --action record-media-call \
+  --source "benzinga" --ticker MU --call bear \
+  --headline "Is This A Bull Trap For Micron?" \
+  --price-at-call 422.0 [--author "Author Name"] [--date 2026-03-20]
+
+# Later, verify if the call was correct
+uv run .claude/skills/auto-trader/scripts/db.py --action verify-media-call \
+  --call-id 1 --price-at-verify 393.43 --correct yes
+
+# Check accuracy stats per source
+uv run .claude/skills/auto-trader/scripts/db.py --action show-media-stats
+uv run .claude/skills/auto-trader/scripts/db.py --action show-media-calls [--source benzinga] [--ticker MU]
+```
+
+**After scanning for opportunities, save watchlist items:**
+```bash
+# Add a ticker to the watchlist with full context
+uv run .claude/skills/auto-trader/scripts/db.py --action add-watchlist \
+  --ticker MRVL --setup-type "Minervini trend" \
+  --entry-trigger "Pullback to $93-95" \
+  --entry-price-target 94.0 --stop-loss 85.0 --take-profit 120.0 \
+  --position-size-pct 3.0 --analyst-upside-pct 22.0 \
+  --thesis "Why we like it" --last-price 98.45
+
+# Update a watchlist entry (e.g. new trigger, price update)
+uv run .claude/skills/auto-trader/scripts/db.py --action update-watchlist \
+  --ticker MRVL --last-price 94.0 --notes "Pulled back to target zone"
+
+# Mark as ready (trigger conditions met)
+uv run .claude/skills/auto-trader/scripts/db.py --action update-watchlist \
+  --ticker MRVL --status ready
+
+# Remove from watchlist (thesis invalidated)
+uv run .claude/skills/auto-trader/scripts/db.py --action remove-watchlist --ticker MRVL
+
+# View active watchlist
+uv run .claude/skills/auto-trader/scripts/db.py --action show-watchlist
+uv run .claude/skills/auto-trader/scripts/db.py --action show-watchlist --status ready
+```
+
+**To review history at session start:**
+```bash
+uv run .claude/skills/auto-trader/scripts/db.py --action show-trades --status open
+uv run .claude/skills/auto-trader/scripts/db.py --action show-pnl
+uv run .claude/skills/auto-trader/scripts/db.py --action show-sessions --limit 3
+uv run .claude/skills/auto-trader/scripts/db.py --action show-watchlist
+```
+
+## MANDATORY: Read Strategy Before Every Session
+
+**Before doing ANYTHING**, read the master strategy file:
+```bash
+# This file contains ALL trading rules: entry/exit, position sizing, risk management, session flow
+cat ~/.claude/projects/-Users-zeyuli-projects-traderz/memory/strategy_master.md
+```
+Follow the session flow defined there (Phases 1-6). The workflow below is a quick reference.
+
+## Workflow: Full Trading Session
+
+When the user says "run trading session", "今天如何", or similar:
+
+### Phase 1: Snapshot
+```bash
+uv run .claude/skills/auto-trader/scripts/trade.py --action portfolio
+uv run .claude/skills/auto-trader/scripts/db.py --action show-sessions --limit 3
+```
+
+### Phase 2+3: Full Market Scan + Position Data — ONE COMMAND
+```bash
+uv run .claude/skills/auto-trader/scripts/run_session.py
+```
+This automatically:
+- Reads open positions + watchlist from db.py
+- Runs screener (tech50 + 44 multi-sector stocks) in parallel
+- Runs discover (700+ universe) in parallel
+- Runs market_intel (sectors, movers, correlations) in parallel
+- Fetches technical data for all position + watchlist tickers in parallel
+- Fetches news/macro for all relevant tickers
+- Outputs everything to `/tmp/session_scan.json`
+
+**Quick mode** (skip discover, faster): `run_session.py --quick`
+**Scan only** (no position data): `run_session.py --phase scan`
+**Positions only** (no full scan): `run_session.py --phase positions`
+
+After it completes, read `/tmp/session_scan.json` and analyze. The JSON has these sections:
+- `positions` / `watchlist` — what we hold and watch
+- `screener.tech50` / `screener.multi_sector` — oversold bounce, breakout, squeeze, RS, gap up
+- `discover` — gainers, trending up, new highs, momentum leaders
+- `market_intel` — sector rankings, movers, correlations
+- `fetch_data` — per-ticker technical indicators for all positions + watchlist
+- `news_macro` — headlines, macro regime, calendar, sentiment
+- `errors` — any scripts that failed (session continues despite errors)
+
+### Phase 4: Analyze
+Using the consolidated data from session_scan.json:
+1. Check existing positions (stops, exit conditions, trailing stops)
+2. Review screener/discover hits for new opportunities
+3. Apply 5-step analysis workflow (numbers → news → cross-ref → macro filter → decision)
+4. Cross-check diversification across sectors
+
+### Phase 5: Execute
+- **Confirmation rule**: Single trade > $3,000 OR daily total new buys > $5,000 → ask user first. Otherwise execute directly.
+- Place stop-loss orders immediately after entry
+- Record everything in db.py
+
+### Phase 6: Stop Hunting Scan (brief)
+Quick check on held positions + watchlist for stop hunting signals (long wicks, volume spikes at support, V-reversals). Report only if found.
+
+### Phase 7: Bookkeeping
+```bash
+uv run .claude/skills/auto-trader/scripts/db.py --action snapshot
+uv run .claude/skills/auto-trader/scripts/db.py --action record-session --regime "..." --summary "..."
+```
+
+### Phase 8: Telegram 报告（必做）
+Session 结束后，发送完整中文报告到 Telegram。分 4 封信：
+1. **总览 + 今日操作**: 账户、P&L、每笔交易的原因
+2. **持仓详情**: 每个持仓的技术状态、thesis 是否成立
+3. **宏观 + 市场**: 板块排名、关键新闻、macro regime
+4. **Watchlist + 反思**: watchlist 更新、错过的机会、教训
+
+使用 `notify_telegram.py --action pages` 发送（stdin 传 JSON 数组）：
+```bash
+echo '["第1封内容", "第2封内容", "第3封内容", "第4封内容"]' | \
+  uv run .claude/skills/auto-trader/scripts/notify_telegram.py --action pages
+```
+每封信标注日期和编号（如"4/8 早盘 第1封"）。中文为主，英文术语保留原文。
+
+## Workflow: Single Stock Analysis
+
+When the user asks to analyze a specific stock (e.g. "analyze AAPL"):
+
+1. **Fetch data**:
    ```bash
    uv run .claude/skills/auto-trader/scripts/fetch_data.py --ticker AAPL --period 6mo --interval 1d
-   ```
-   This outputs a JSON file at `/tmp/analysis_AAPL.json` containing:
-   - Recent price action (last 30 days OHLCV)
-   - All computed technical indicators with current values
-   - Key support/resistance levels
-   - Recent volume trends
-   - Basic fundamental snapshot
-   - Analyst price targets, recommendation summary, recent headlines
-
-2b. **Fetch news, macro & sentiment context**:
-   ```bash
-   uv run .claude/skills/auto-trader/scripts/news_macro.py --mode all --tickers "AAPL,NVDA"
-   ```
-   This outputs `/tmp/news_macro.json` containing:
-   - News headlines with source and timestamps
-   - Analyst consensus (targets, ratings, recent changes)
-   - Macro regime (VIX, yields, credit, breadth, dollar, commodities)
-   - Economic calendar (FOMC, CPI, jobs, earnings)
-   - Headline sentiment per ticker
-
-3. **Claude analyzes the data** (follow the 5-step workflow above):
-
-   **A. Numbers first (技术面)**:
-   - **Trend**: Overall direction from SMAs, price action
-   - **Momentum**: RSI, MACD, Stochastic — accelerating or fading?
-   - **Key levels**: Support, resistance, Bollinger Bands
-   - **Volume**: Confirming the move or diverging?
-   - → Form preliminary bias
-
-   **B. Read the news (基本面 + 新闻)**:
-   - Actually read the top 10 headlines — identify themes, not just keywords
-   - Flag: catalysts, partnerships, earnings surprises, analyst changes
-   - Ask: is this new info or priced in? Real signal or 烟雾弹?
-   - → Adjust conviction (but don't flip the bias unless overwhelming)
-
-   **C. Cross-reference (交叉验证)**:
-   - Does the news EXPLAIN why the numbers look the way they do?
-   - If news is bullish but price is down — market disagrees, be cautious
-   - If news is bearish but price holds — strong hands, potential opportunity
-
-   **D. Macro & calendar filter (宏观过滤)**:
-   - Check VIX, yields, credit, breadth
-   - Any FOMC/CPI/earnings in next 3 days? → filter out new entries
-
-   **E. Final decision (最终判断)**:
-   - **Signal**: BUY / SELL / HOLD — must be justified by numbers
-   - **Confidence**: High / Medium / Low
-   - **News impact**: How news changes conviction (e.g. "news adds +1 conviction")
-   - **Plan**: Entry, stop-loss, take-profit (if BUY or SELL)
-   - **Position size**: % of portfolio (conservative: 2-5%)
-
-4. **Execute the trade** (if user confirms):
-   ```bash
-   uv run .claude/skills/auto-trader/scripts/trade.py --action buy --ticker AAPL --qty 10 --order-type market
-   ```
-   Or for a bracket order with stop-loss and take-profit:
-   ```bash
-   uv run .claude/skills/auto-trader/scripts/trade.py --action buy --ticker AAPL --qty 10 \
-     --order-type bracket --stop-loss 170.00 --take-profit 195.00
+   uv run .claude/skills/auto-trader/scripts/news_macro.py --mode all --tickers "AAPL"
    ```
 
-5. **Check portfolio**:
-   ```bash
-   uv run .claude/skills/auto-trader/scripts/trade.py --action portfolio
-   ```
+2. **Analyze** using the 5-step workflow above
+
+3. **Execute** if recommended (follow confirmation rule in Phase 5)
 
 ## Important Guidelines
 
-- **Always confirm with the user before executing any trade.** Show your
-  analysis and recommendation first, then ask if they want to proceed.
-- **Risk management is paramount.** Never suggest putting more than 5% of
-  portfolio in a single position unless the user explicitly asks for it.
-- **Paper trading only.** This skill is designed for Alpaca paper trading.
-  Never attempt to connect to live trading endpoints.
-- **Not financial advice.** Always remind the user that this is a simulation
-  tool for learning and strategy testing, not financial advice.
+- **Confirmation rule**: Single trade > $3,000 OR daily total > $5,000 → ask user.
+  Below threshold → execute directly. User learns by observing, not by approving every trade.
+- **Risk management is paramount.** Never put more than 5% of portfolio in a single position.
+- **Paper trading only.** Never attempt to connect to live trading endpoints.
+- **Full market scan is MANDATORY** every session. Never limit analysis to existing watchlist only.
 
 ## Available Commands
 
@@ -246,10 +366,13 @@ When the user asks to analyze or trade a stock:
 ## Files in this skill
 
 - `SKILL.md` — This file (instructions and workflow)
-- `scripts/fetch_data.py` — Data fetching, technical analysis, and analyst/news data
-- `scripts/news_macro.py` — News, macro, analyst, calendar & sentiment intelligence
+- `scripts/run_session.py` — **Session orchestrator**: one command to run all scans + fetch all data. Use this instead of calling individual scripts.
+- `scripts/fetch_data.py` — Data fetching, technical analysis, and analyst/news data (called by run_session.py, or standalone for single ticker)
+- `scripts/news_macro.py` — News, macro, analyst, calendar & sentiment intelligence (called by run_session.py, or standalone)
 - `scripts/trade.py` — Alpaca paper trading execution
-- `scripts/market_intel.py` — Market intelligence scanner (sectors, earnings, movers)
-- `scripts/screener.py` — Trading opportunity screener
-- `scripts/discover.py` — Stock discovery engine
+- `scripts/db.py` — SQLite trading database (trades, snapshots, sessions, lessons)
+- `scripts/market_intel.py` — Market intelligence scanner (called by run_session.py, or standalone)
+- `scripts/screener.py` — Trading opportunity screener (called by run_session.py, or standalone)
+- `scripts/discover.py` — Stock discovery engine (called by run_session.py, or standalone)
+- `scripts/notify_telegram.py` — Telegram notification sender (session reports, alerts)
 - `references/indicators.md` — Reference guide for interpreting technical indicators

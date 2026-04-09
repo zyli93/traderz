@@ -160,7 +160,9 @@ def mode_news(tickers: list[str]) -> dict:
                 api_key=creds["ALPACA_API_KEY"],
                 secret_key=creds["ALPACA_SECRET_KEY"],
             )
-            request = NewsRequest(symbols=",".join(tickers), limit=50)
+            # Alpaca uses "BTCUSD" format, not "BTC-USD"
+            alpaca_syms = [t.replace("-", "") for t in tickers]
+            request = NewsRequest(symbols=",".join(alpaca_syms), limit=50)
             news_set = client.get_news(request)
             news_items = news_set.data.get("news", []) if news_set.data else []
 
@@ -242,55 +244,68 @@ def mode_analyst(tickers: list[str]) -> dict:
     for sym in tickers:
         try:
             tk = yf.Ticker(sym)
-            info = tk.info
-            current_price = info.get("currentPrice") or info.get("regularMarketPrice")
+            is_crypto = sym.upper().endswith("-USD") and not sym.startswith("^")
 
-            # Price targets
-            targets = {}
-            try:
-                apt = tk.analyst_price_targets
-                if apt is not None and isinstance(apt, dict):
-                    targets = {
-                        "current": apt.get("current"),
-                        "mean": apt.get("mean"),
-                        "high": apt.get("high"),
-                        "low": apt.get("low"),
-                        "number_of_analysts": apt.get("numberOfAnalysts"),
-                    }
-            except Exception:
-                pass
+            if is_crypto:
+                # Crypto has no analyst data — skip to avoid 404 errors
+                try:
+                    info = tk.info
+                    current_price = info.get("regularMarketPrice")
+                except Exception:
+                    current_price = None
+                targets = {}
+                rec_summary = {}
+                recent_changes = []
+            else:
+                info = tk.info
+                current_price = info.get("currentPrice") or info.get("regularMarketPrice")
 
-            # Recommendations summary
-            rec_summary = {}
-            try:
-                rs = tk.recommendations_summary
-                if rs is not None and isinstance(rs, pd.DataFrame) and not rs.empty:
-                    latest = rs.iloc[0].to_dict()
-                    rec_summary = {
-                        "strongBuy": int(latest.get("strongBuy", 0)),
-                        "buy": int(latest.get("buy", 0)),
-                        "hold": int(latest.get("hold", 0)),
-                        "sell": int(latest.get("sell", 0)),
-                        "strongSell": int(latest.get("strongSell", 0)),
-                    }
-            except Exception:
-                pass
+                # Price targets
+                targets = {}
+                try:
+                    apt = tk.analyst_price_targets
+                    if apt is not None and isinstance(apt, dict):
+                        targets = {
+                            "current": apt.get("current"),
+                            "mean": apt.get("mean"),
+                            "high": apt.get("high"),
+                            "low": apt.get("low"),
+                            "number_of_analysts": apt.get("numberOfAnalysts"),
+                        }
+                except Exception:
+                    pass
 
-            # Recent rating changes
-            recent_changes = []
-            try:
-                recs = tk.recommendations
-                if recs is not None and isinstance(recs, pd.DataFrame) and not recs.empty:
-                    for _, row in recs.tail(5).iterrows():
-                        recent_changes.append({
-                            "firm": row.get("Firm", ""),
-                            "grade": row.get("To Grade", ""),
-                            "from_grade": row.get("From Grade", ""),
-                            "action": row.get("Action", ""),
-                        })
-                    recent_changes.reverse()  # most recent first
-            except Exception:
-                pass
+                # Recommendations summary
+                rec_summary = {}
+                try:
+                    rs = tk.recommendations_summary
+                    if rs is not None and isinstance(rs, pd.DataFrame) and not rs.empty:
+                        latest = rs.iloc[0].to_dict()
+                        rec_summary = {
+                            "strongBuy": int(latest.get("strongBuy", 0)),
+                            "buy": int(latest.get("buy", 0)),
+                            "hold": int(latest.get("hold", 0)),
+                            "sell": int(latest.get("sell", 0)),
+                            "strongSell": int(latest.get("strongSell", 0)),
+                        }
+                except Exception:
+                    pass
+
+                # Recent rating changes
+                recent_changes = []
+                try:
+                    recs = tk.recommendations
+                    if recs is not None and isinstance(recs, pd.DataFrame) and not recs.empty:
+                        for _, row in recs.tail(5).iterrows():
+                            recent_changes.append({
+                                "firm": row.get("Firm", ""),
+                                "grade": row.get("To Grade", ""),
+                                "from_grade": row.get("From Grade", ""),
+                                "action": row.get("Action", ""),
+                            })
+                        recent_changes.reverse()  # most recent first
+                except Exception:
+                    pass
 
             # Compute derived metrics
             upside_pct = None
@@ -563,8 +578,10 @@ def mode_calendar(tickers: list[str]) -> dict:
 
     events = []
 
-    # --- Earnings (reuse yfinance calendar logic) ---
+    # --- Earnings (reuse yfinance calendar logic, skip crypto) ---
     for sym in tickers:
+        if sym.upper().endswith("-USD") and not sym.startswith("^"):
+            continue  # Crypto has no earnings calendar
         try:
             tk = yf.Ticker(sym)
             cal = tk.calendar

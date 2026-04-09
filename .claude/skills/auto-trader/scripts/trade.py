@@ -179,8 +179,8 @@ def place_order(client, ticker, qty, side, order_type, limit_price=None,
     order_side = OrderSide.BUY if side == "buy" else OrderSide.SELL
     crypto = is_crypto(ticker)
 
-    # Crypto uses GTC; stocks use DAY
-    tif = TimeInForce.GTC if crypto else TimeInForce.DAY
+    # Use GTC for all orders — DAY stops expire at close and leave positions unprotected
+    tif = TimeInForce.GTC
 
     # Build qty/notional kwargs
     size_kwargs = {}
